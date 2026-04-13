@@ -6,7 +6,6 @@ import { processBudgetFiles, type PreviewData } from '../lib/excelProcessor';
 export function BudgetPrefill() {
   const [packingListFile, setPackingListFile] = useState<File | null>(null);
   const [masterFile, setMasterFile] = useState<File | null>(null);
-  const [vendorName, setVendorName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +17,7 @@ export function BudgetPrefill() {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await processBudgetFiles(packingListFile, masterFile, vendorName);
+      const result = await processBudgetFiles(packingListFile, masterFile);
       setPreviewData(result.preview);
       setFinalFileBlob(result.blob);
     } catch (err: any) {
@@ -90,18 +89,9 @@ export function BudgetPrefill() {
 
       {/* Action Bar */}
       <div className="flex items-center justify-between p-4 bg-brand-panel rounded-xl border border-[#1e293b]">
-        <div className="flex flex-col md:flex-row items-center space-y-3 md:space-y-0 md:space-x-4 flex-1 mr-4">
-           <div className="flex items-center space-x-3 w-full max-w-sm">
-             <Settings2 className="w-5 h-5 text-brand-text-muted flex-shrink-0" />
-             <input
-                type="text"
-                placeholder="Fornecedor (Opcional) para aprender padrão"
-                value={vendorName}
-                onChange={e => setVendorName(e.target.value)}
-                className="w-full bg-[#161c2c] border border-[#1e293b] rounded text-sm px-3 py-1.5 focus:outline-none focus:border-brand-accent text-white"
-             />
-           </div>
-           <span className="text-xs text-brand-text-muted hidden lg:block">Usando: Inteligência Artificial (Google Gemini) e Inferência Matemática.</span>
+        <div className="flex items-center space-x-3">
+           <Settings2 className="w-5 h-5 text-brand-text-muted" />
+           <span className="text-sm text-brand-text-muted">A extração utiliza heurísticas para identificar colunas (inglês/mandarim).</span>
         </div>
         <button
           onClick={handleProcess}
@@ -156,7 +146,7 @@ export function BudgetPrefill() {
                   <th className="px-6 py-4 border-b border-[#1e293b]">Qtd Total</th>
                   <th className="px-6 py-4 border-b border-[#1e293b]">Peso (Unit)</th>
                   <th className="px-6 py-4 border-b border-[#1e293b]">CBM (Unit)</th>
-                  <th className="px-6 py-4 border-b border-[#1e293b]">Confiança (IA)</th>
+                  <th className="px-6 py-4 border-b border-[#1e293b]">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#1e293b] text-sm text-brand-text">
@@ -189,28 +179,15 @@ export function BudgetPrefill() {
                          {item.unitCbm ? item.unitCbm.toFixed(4) : 'N/D'}
                       </td>
                       <td className="px-6 py-4">
-                         {item.confidence === 'high' && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-brand-success/10 text-brand-success">
-                              🟢 Alta
-                            </span>
-                         )}
-                         {item.confidence === 'medium' && (
-                            <div className="flex flex-col gap-1 items-start">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-500/10 text-yellow-500">
-                                🟡 Média
-                              </span>
-                              {item.inferredFields && item.inferredFields.length > 0 && (
-                                <span className="text-[10px] text-brand-text-muted">Inferred: {item.inferredFields.join(', ')}</span>
-                              )}
-                            </div>
-                         )}
-                         {item.confidence === 'low' && (
-                            <span className="inline-flex flex-col text-xs text-brand-error gap-1">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-brand-error/10 w-fit">
-                                🔴 Baixa
-                              </span>
+                         {hasError ? (
+                            <span className="inline-flex flex-col text-xs text-brand-error">
                               {!item.ref && <span>Ref pendente</span>}
                               {item.qty <= 0 && <span>Qtd inválida</span>}
+                              {(!item.unitWeight || !item.unitCbm) && <span>Pesos faltantes</span>}
+                            </span>
+                         ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-brand-success/10 text-brand-success">
+                              OK
                             </span>
                          )}
                       </td>

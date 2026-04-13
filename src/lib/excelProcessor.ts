@@ -1,8 +1,4 @@
 import ExcelJS from 'exceljs';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { getVendorMapping } from './learningStore';
-
-export type ConfidenceScore = 'high' | 'medium' | 'low';
 
 export interface ParsedItem {
   ref: string;
@@ -12,11 +8,9 @@ export interface ParsedItem {
   totalCbm: number;
   unitWeight: number;
   unitCbm: number;
-  confidence: ConfidenceScore;
-  inferredFields: string[]; // Fields that were guessed/calculated mathematically
-  imageUrl?: string;
-  imageBlobUrl?: string; 
-  imageBuffer?: ArrayBuffer; 
+  imageUrl?: string; // Original image extension/Type mapping for ExcelJS
+  imageBlobUrl?: string; // For UI preview
+  imageBuffer?: ArrayBuffer; // For injection
   imageExt?: string;
 }
 
@@ -24,19 +18,14 @@ export interface PreviewData {
   items: ParsedItem[];
 }
 
-// Fallback regexes if Gemini fails or is slow
-const defaultColumns = {
-  ref: /(ref|item|sku|código|code|part no|型号)/i,
-  desc: /(desc|name|produto|product|item name|品名|商品)/i,
-  qty: /(qty|quant|qtty|pcs|pieces|数量|total qty)/i,
-  weight: /(gw|gross weight|net weight|n\.w|peso|nw|净重|毛重)/i,
-  cbm: /(cbm|vol|volume|m3|m³|体积)/i,
+// Heuristics mappings
+const regexes = {
+  ref: /(ref|item|sku|código|code|part|modelo|型号|model)/i,
+  desc: /(desc|name|produto|product|品名|商品|名称|英文)/i,
+  qty: /(total\s*qty|total\s*quant|total\s*qtty|t\*quant|总数量|qty|quant|qtty|pcs|pieces|数量)/i,
+  weight: /(t\*gw|t\*nw|total\s*weight|gross\s*weight|net\s*weight|peso\s*bruto|peso\s*total|peso\s*l[ií]q|g\.w|n\.w|peso|nw|总毛重|净重|毛重)/i,
+  cbm: /(t\*cbm|total\s*cbm|total\s*vol|cbm|vol|volume|m3|m³|总体积|体积)/i,
   image: /(pic|imag|foto|photo|picture|图片)/i,
-  boxes: /(ctn|carton|caixa|箱数)/i, // for inference
-  qtyPerBox: /(pcs\/ctn|qty\/ctn|embalagem|装箱数)/i, // for inference
-  length: /(length|comp|comprimento|长)/i, // for inference
-  width: /(width|largura|宽)/i, // for inference
-  height: /(height|altura|高)/i // for inference
 };
 
 function getCellValue(cell: ExcelJS.Cell | undefined): string {
@@ -53,174 +42,76 @@ function getCellValue(cell: ExcelJS.Cell | undefined): string {
   return String(cell.value).trim();
 }
 
-function cleanNumber(val: string): number {
-  if (!val) return 0;
-  // Handling 1.000,50 vs 1,000.50 heuristically:
-  let str = val.toString().trim();
-  // Remove spaces
-  str = str.replace(/\s+/g, '');
-  // If we have both commas and dots, determine which is decimal
-  if (str.includes(',') && str.includes('.')) {
-    const lastComma = str.lastIndexOf(',');
-    const lastDot = str.lastIndexOf('.');
-    if (lastComma > lastDot) {
-      // 1.000,50 -> 1000.50
-      str = str.replace(/\./g, '').replace(',', '.');
-    } else {
-      // 1,000.50 -> 1000.50
-      str = str.replace(/,/g, '');
-    }
-  } else if (str.includes(',')) {
-    // only commas: could be 1,000 or 2,5. Assume , is decimal if only 1-2 digits follow it, otherwise thousands separator.
-    const parts = str.split(',');
-    if (parts.length === 2 && parts[1].length <= 2) {
-      str = str.replace(',', '.');
-    } else {
-      str = str.replace(/,/g, ''); // just remove 
-    }
-  }
-  const parsed = parseFloat(str.replace(/[^0-9.-]/g, ''));
-  return isNaN(parsed) ? 0 : parsed;
-}
-
-/** Calls Gemini API to semantically analyze and match headers */
-async function geminiSemanticMapHeaders(headers: string[]): Promise<Record<string, number>> {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) throw new Error("Gemini API key is missing");
-  
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
-  
-  const prompt = `
-  You are an expert AI parser for international trade Packing Lists.
-  I have extracted the following column headers from a spreadsheet:
-  ${JSON.stringify(headers)}
-
-  Map them to these exact canonical keys if they represent the same concept (semantically, across English, Mandarin, or Portuguese):
-  - "ref" (Product Code, SKU, Item No, 型号)
-  - "desc" (Description, Product Name, 品名)
-  - "qty" (Total Quantity, 数量, PCS)
-  - "weight" (Gross/Net Weight, GW, NW, 净重, 毛重)
-  - "cbm" (Total Volume, CBM, 体积)
-  - "image" (Picture, Photo, 图片)
-  - "boxes" (Total Cartons, CTN, 箱数)
-  - "qtyPerBox" (PCS/CTN, 装箱数)
-  - "length" (L, Comprimento, 长)
-  - "width" (W, Largura, 宽)
-  - "height" (H, Algura, 高)
-
-  Return ONLY a JSON object where keys are the specific string from the array of headers I gave you, and the value is the canonical key. If a header does not match any, ignore it. Example: {"型号": "ref", "Total Qty": "qty"}
-  `;
-
-  try {
-    const response = await model.generateContent(prompt);
-    const jsonStr = response.response.text();
-    const mappedObj = JSON.parse(jsonStr);
-    
-    // Convert text mapping to column indexes
-    const columnMap: Record<string, number> = {};
-    headers.forEach((headerText, index) => {
-      // Find exact or sanitized key
-      const key = Object.keys(mappedObj).find(k => k.toLowerCase() === headerText.toLowerCase());
-      if (key && mappedObj[key]) {
-        columnMap[mappedObj[key]] = index + 1; // 1-indexed in ExcelJS
-      }
-    });
-    return columnMap;
-  } catch (err) {
-    console.error("Gemini mapping failed, falling back to heuristic", err);
-    return fallbackHeuristicMapHeaders(headers);
-  }
-}
-
-/** Fallback to Regex when Gemini is unavailable */
-function fallbackHeuristicMapHeaders(headers: string[]): Record<string, number> {
-  const columnMap: Record<string, number> = {};
-  headers.forEach((headerText, i) => {
-    const colNumber = i + 1;
-    for (const [key, regex] of Object.entries(defaultColumns)) {
-      if (!columnMap[key] && regex.test(headerText)) {
-        columnMap[key] = colNumber;
-      }
-    }
-  });
-  return columnMap;
-}
-
 /**
- * Extracts items from Packing List file with AI Inference
+ * Extracts items from Packing List file
  */
-export async function parsePackingList(file: File, vendorName?: string): Promise<ParsedItem[]> {
+export async function parsePackingList(file: File): Promise<ParsedItem[]> {
   const arrayBuffer = await file.arrayBuffer();
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(arrayBuffer);
 
-  // Consider the first sheet represents the packing list, unless there are multiple
-  // For multiple sheets, ideally we aggregate, but here we process the primary one with data
-  // Finding the sheet with the most rows
-  let targetSheet = workbook.worksheets[0];
-  let maxRows = 0;
-  for (const sheet of workbook.worksheets) {
-      if (sheet.rowCount > maxRows) {
-          maxRows = sheet.rowCount;
-          targetSheet = sheet;
-      }
-  }
-  const worksheet = targetSheet;
+  // Consider the first sheet represents the packing list
+  const worksheet = workbook.worksheets[0];
   if (!worksheet) throw new Error("A planilha de Packing List está vazia.");
 
   let headerRowIndex = -1;
-  let headers: string[] = [];
-  let columnMap: Record<string, number> = {};
+  const columnMap: Record<string, number[]> = {};
 
-  // Step 1: Intelligent Table Start Detection
-  // We score rows based on how many canonical keywords they trigger
-  let bestScore = 0;
+  // Find header row: look for a row that has at least 2 known columns
   worksheet.eachRow((row, rowNumber) => {
-    if (headerRowIndex !== -1) return;
+    if (headerRowIndex !== -1) return; // already found
     
-    let score = 0;
-    const rowHeaders: string[] = [];
+    let matches = 0;
+
     row.eachCell((cell) => {
       const val = getCellValue(cell);
-      rowHeaders.push(val);
-      for (const regex of Object.values(defaultColumns)) {
-        if (regex.test(val)) score++;
-      }
+      if (regexes.ref.test(val) || regexes.desc.test(val)) matches++;
+      if (regexes.qty.test(val) || regexes.weight.test(val) || regexes.cbm.test(val)) matches++;
     });
 
-    if (score >= Math.max(3, bestScore) && rowHeaders.length > 2) {
-      bestScore = score;
+    if (matches >= 2) {
       headerRowIndex = rowNumber;
-      headers = rowHeaders;
+      // Map columns allowing arrays of matches
+      row.eachCell((cell, colNumber) => {
+        const val = getCellValue(cell);
+        
+        if (regexes.ref.test(val)) {
+            columnMap['ref'] = columnMap['ref'] || [];
+            columnMap['ref'].push(colNumber);
+        } else if (regexes.desc.test(val)) {
+            columnMap['desc'] = columnMap['desc'] || [];
+            columnMap['desc'].push(colNumber);
+        } else if (regexes.qty.test(val)) {
+            columnMap['qty'] = columnMap['qty'] || [];
+            columnMap['qty'].push(colNumber);
+        } else if (regexes.weight.test(val)) {
+            columnMap['weight'] = columnMap['weight'] || [];
+            columnMap['weight'].push(colNumber);
+        } else if (regexes.cbm.test(val)) {
+            columnMap['cbm'] = columnMap['cbm'] || [];
+            columnMap['cbm'].push(colNumber);
+        } else if (regexes.image.test(val)) {
+            columnMap['image'] = columnMap['image'] || [];
+            columnMap['image'].push(colNumber);
+        }
+      });
     }
   });
 
   if (headerRowIndex === -1) {
-    throw new Error("Tabela despadronizada: Não foi possível identificar o início dos dados automaticamente.");
+    throw new Error("Não foi possível identificar o cabeçalho no Packing List (Ex: faltando colunas Ref / Qty).");
   }
 
-  // Step 2: Semantic AI Mapping
-  let useAi = true;
-  if (!import.meta.env.VITE_GEMINI_API_KEY) {
-      useAi = false;
-  }
-
-  const learnedMapping = vendorName ? getVendorMapping(vendorName) : null;
-  if (learnedMapping && Object.keys(learnedMapping).length > 0) {
-     // Merge learned mapping logic here - simplified to fallback
-     columnMap = fallbackHeuristicMapHeaders(headers); // in a full impl, we map learned indices
-  } else if (useAi) {
-     columnMap = await geminiSemanticMapHeaders(headers);
-  } else {
-     columnMap = fallbackHeuristicMapHeaders(headers);
-  }
-
+  // Extract media from workbook (only some exceljs versions support this cleanly, but we try)
+  // workbook.model.media contains all images
   const media = (workbook.model as any).media || [];
+  
+  // Map images by row based on worksheet placements
   const imageByRow: Record<number, any> = {};
   if (worksheet.getImages) {
     for (const imagePlacement of worksheet.getImages()) {
-      const rowNum = Math.floor(imagePlacement.range.tl.row) + 1; 
+      const rowNum = Math.floor(imagePlacement.range.tl.row) + 1; // 0-indexed in range
+      // Just keep the first image found for the row
       if (!imageByRow[rowNum]) {
         const mediaId = imagePlacement.imageId;
         const mediaObj = media.find((m: any) => m.index === mediaId);
@@ -234,54 +125,54 @@ export async function parsePackingList(file: File, vendorName?: string): Promise
     }
   }
 
+  const getBestNumber = (row: ExcelJS.Row, colIndexes: number[] | undefined): number => {
+    if (!colIndexes) return 0;
+    // Iterate backwards. In Packing lists, "Total" columns usually appear to the right of "Unit" ones.
+    for (let i = colIndexes.length - 1; i >= 0; i--) {
+      const val = getCellValue(row.getCell(colIndexes[i]));
+      const num = parseFloat(val.replace(',', '.').replace(/[^0-9.-]/g, '')) || 0;
+      if (num > 0) return num;
+    }
+    return 0;
+  };
+
+  const getBestString = (row: ExcelJS.Row, colIndexes: number[] | undefined): string => {
+    if (!colIndexes) return '';
+    for (let i = colIndexes.length - 1; i >= 0; i--) {
+      const val = getCellValue(row.getCell(colIndexes[i]));
+      if (val) return val;
+    }
+    return '';
+  };
+
   const itemsMap: Record<string, ParsedItem> = {};
 
   worksheet.eachRow((row, rowNumber) => {
-    if (rowNumber <= headerRowIndex) return; 
+    if (rowNumber <= headerRowIndex) return; // Skip headers
     
-    // Get base values
-    const rawRef = columnMap['ref'] ? getCellValue(row.getCell(columnMap['ref'])) : '';
-    const ref = rawRef.trim();
-    if (!ref) return; // Skip empty rows
+    const numQty = getBestNumber(row, columnMap['qty']);
 
-    const desc = columnMap['desc'] ? getCellValue(row.getCell(columnMap['desc'])) : '';
+    let ref = getBestString(row, columnMap['ref']);
+    const desc = getBestString(row, columnMap['desc']);
     
-    // Numeric metrics
-    let qty = cleanNumber(columnMap['qty'] ? getCellValue(row.getCell(columnMap['qty'])) : '');
-    let weight = cleanNumber(columnMap['weight'] ? getCellValue(row.getCell(columnMap['weight'])) : '');
-    let cbm = cleanNumber(columnMap['cbm'] ? getCellValue(row.getCell(columnMap['cbm'])) : '');
-
-    // Inference Metrics
-    const boxes = cleanNumber(columnMap['boxes'] ? getCellValue(row.getCell(columnMap['boxes'])) : '');
-    const qtyPerBox = cleanNumber(columnMap['qtyPerBox'] ? getCellValue(row.getCell(columnMap['qtyPerBox'])) : '');
-    const L = cleanNumber(columnMap['length'] ? getCellValue(row.getCell(columnMap['length'])) : '');
-    const W = cleanNumber(columnMap['width'] ? getCellValue(row.getCell(columnMap['width'])) : '');
-    const H = cleanNumber(columnMap['height'] ? getCellValue(row.getCell(columnMap['height'])) : '');
-
-    const inferredFields: string[] = [];
-
-    // Inference Engine Layer
-    if (qty === 0 && boxes > 0 && qtyPerBox > 0) {
-        qty = boxes * qtyPerBox;
-        inferredFields.push('qty');
+    if (!ref) {
+      if (desc || numQty > 0) {
+         ref = 'UNREF-' + rowNumber; // Use generic ref if missing
+      } else {
+         return; // If BOTH ref/desc and qty are missing, assume empty row
+      }
     }
-
-    if (cbm === 0 && L > 0 && W > 0 && H > 0 && boxes > 0) {
-        // Assume dimensions in CM
-        cbm = ((L * W * H) / 1000000) * boxes;
-        inferredFields.push('cbm');
-    } else if (cbm === 0 && L > 0 && W > 0 && H > 0 && boxes === 0) {
-        // Just one unit volume as fallback, very low confidence
-        cbm = ((L * W * H) / 1000000);
-        inferredFields.push('cbm');
-    }
+    
+    const numWeight = getBestNumber(row, columnMap['weight']);
+    const numCbm = getBestNumber(row, columnMap['cbm']);
 
     let imgData = imageByRow[rowNumber];
-    
+
     if (itemsMap[ref]) {
-      itemsMap[ref].qty += qty;
-      itemsMap[ref].totalWeight += weight;
-      itemsMap[ref].totalCbm += cbm;
+      // Aggregate
+      itemsMap[ref].qty += numQty;
+      itemsMap[ref].totalWeight += numWeight;
+      itemsMap[ref].totalCbm += numCbm;
       if (!itemsMap[ref].imageBuffer && imgData) {
         itemsMap[ref].imageBuffer = imgData.buffer;
         itemsMap[ref].imageExt = imgData.ext;
@@ -290,20 +181,18 @@ export async function parsePackingList(file: File, vendorName?: string): Promise
       itemsMap[ref] = {
         ref,
         description: desc,
-        qty: qty,
-        totalWeight: weight,
-        totalCbm: cbm,
+        qty: numQty,
+        totalWeight: numWeight,
+        totalCbm: numCbm,
         unitWeight: 0,
         unitCbm: 0,
-        confidence: 'low', // will evaluate below
-        inferredFields,
         imageBuffer: imgData?.buffer,
         imageExt: imgData?.ext
       };
     }
   });
 
-  // Calculate units and confidence
+  // Calculate units
   const result: ParsedItem[] = Object.values(itemsMap).map(item => {
     if (item.qty > 0) {
       item.unitWeight = item.totalWeight / item.qty;
@@ -313,33 +202,20 @@ export async function parsePackingList(file: File, vendorName?: string): Promise
       const blob = new Blob([item.imageBuffer], { type: `image/${item.imageExt || 'png'}` });
       item.imageBlobUrl = window.URL.createObjectURL(blob);
     }
-
-    // Evaluate Confidence
-    let missingCritical = 0;
-    if (item.qty <= 0) missingCritical++;
-    if (item.totalWeight <= 0) missingCritical++;
-    if (item.totalCbm <= 0) missingCritical++;
-    if (!item.ref) missingCritical++;
-
-    if (missingCritical === 0 && item.inferredFields.length === 0) {
-        item.confidence = 'high';
-    } else if (missingCritical === 0 && item.inferredFields.length > 0) {
-        item.confidence = 'medium'; // Inferred everything successfully
-    } else if (missingCritical === 1) {
-        item.confidence = 'medium';
-    } else {
-        item.confidence = 'low';
-    }
-
     return item;
   });
 
   return result;
 }
 
-export async function processBudgetFiles(packingListFile: File, masterFile: File, vendorName?: string): Promise<{ preview: PreviewData, blob: Blob }> {
-  const items = await parsePackingList(packingListFile, vendorName);
+/**
+ * Modifies the Master workbook with parsed items
+ */
+export async function processBudgetFiles(packingListFile: File, masterFile: File): Promise<{ preview: PreviewData, blob: Blob }> {
+  // 1. Parse Packing List
+  const items = await parsePackingList(packingListFile);
 
+  // 2. Load Master File
   const masterBuffer = await masterFile.arrayBuffer();
   const masterWorkbook = new ExcelJS.Workbook();
   await masterWorkbook.xlsx.load(masterBuffer);
@@ -352,54 +228,77 @@ export async function processBudgetFiles(packingListFile: File, masterFile: File
     throw new Error('Aba "Master" não encontrada na planilha fornecida.');
   }
 
-  const msStartRow = 2;
+  // Preencher Aba "Master"
+  // Procura a linha em branco inicial ou assume a linha 2 para os dados
+  const msStartRow = 2; // Default
   items.forEach((item, index) => {
     const rowNum = msStartRow + index;
     const row = masterSheet.getRow(rowNum);
+    
+    // Col A: Produto (Ref)
     row.getCell(1).value = item.ref;
+    // Col G: Descrição (7)
     row.getCell(7).value = item.description;
+    // Col H: Peso Unitário (8)
     row.getCell(8).value = item.unitWeight;
+    // Col K: CBM Unitário (11)
     row.getCell(11).value = item.unitCbm;
+
     row.commit();
   });
 
+  // Preencher Aba "Produtos"
   if (prodSheet) {
-    const prodStartRow = 2;
+    const prodStartRow = 2; // Assuming line 2 for products
     items.forEach((item, index) => {
       const rowNum = prodStartRow + index;
       const row = prodSheet.getRow(rowNum);
+      
+      // Col D: Quantidade (4)
       row.getCell(4).value = item.qty;
       row.commit();
     });
   }
 
+  // Preencher Aba "Custo Resumido"
   if (costSheet) {
     const costStartRow = 2;
     items.forEach((item, index) => {
       const rowNum = costStartRow + index;
+      
+      // Col B: Imagens (2)
       if (item.imageBuffer && item.imageExt) {
         try {
+          // Add image to workbook
           const imageId = masterWorkbook.addImage({
             buffer: item.imageBuffer,
             extension: item.imageExt as any,
           });
+          
+          // Add to cell B[linha] (which is col index 1, row index diff)
           costSheet.addImage(imageId, {
             tl: { col: 1, row: rowNum - 1 } as any,
             br: { col: 2, row: rowNum } as any,
             editAs: 'oneCell'
           });
+
+          // Aumentar a altura da linha para a imagem caber
           const row = costSheet.getRow(rowNum);
-          row.height = 80;
+          row.height = 80; // approximate pleasant height
           costSheet.getColumn(2).width = 15;
         } catch (e) {
-          console.warn('Falha injetar imagem', e);
+          console.warn('Falha ao injetar imagem na linha', rowNum, e);
         }
       }
     });
   }
 
+  // Export
   const outputBuffer = await masterWorkbook.xlsx.writeBuffer();
   const blob = new Blob([outputBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
-  return { preview: { items }, blob };
+  return {
+    preview: { items },
+    blob
+  };
 }
