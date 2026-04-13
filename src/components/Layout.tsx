@@ -14,11 +14,11 @@ import {
 import { cn } from '../lib/utils';
 
 const sidebarItems = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/' },
-  { id: 'imports', label: 'Imports', icon: Truck, path: '/imports' },
-  { id: 'items', label: 'Items', icon: Package, path: '/items' },
+  // { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/' },
+  // { id: 'imports', label: 'Imports', icon: Truck, path: '/imports' },
+  // { id: 'items', label: 'Items', icon: Package, path: '/items' },
   { id: 'budget-prefill', label: 'Orçamentos', icon: FileSpreadsheet, path: '/budget-prefill' },
-  { id: 'settings', label: 'Settings', icon: Settings, path: '/settings' },
+  // { id: 'settings', label: 'Settings', icon: Settings, path: '/settings' },
 ];
 
 export function Layout() {
