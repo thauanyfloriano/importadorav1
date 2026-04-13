@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { Share2, CloudUpload, Package, Maximize, TrendingUp, CheckCircle, Download } from 'lucide-react';
 export function Dashboard() {
   return (

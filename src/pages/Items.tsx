@@ -1,5 +1,4 @@
-import React from 'react';
-import { Filter, Edit2, TrendingUp, Search, CheckCircle, AlertTriangle, ChevronLeft, ChevronRight, Map } from 'lucide-react';
+import { Filter, Edit2, CheckCircle, AlertTriangle, ChevronLeft, ChevronRight, Map } from 'lucide-react';
 
 const mockItems = [
   {

@@ -1,5 +1,4 @@
-import React from 'react';
-import { CloudUpload, History, Layers, List, Settings2, FileText, CheckCircle2, AlertCircle, CircleDashed } from 'lucide-react';
+import { CloudUpload, History, Layers, List, Settings2, FileText, CircleDashed } from 'lucide-react';
 
 export function Imports() {
   return (
