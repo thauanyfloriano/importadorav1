@@ -1,10 +1,10 @@
 
 import { Outlet, NavLink } from 'react-router-dom';
 import { 
-  LayoutDashboard, 
-  Truck, 
-  Package, 
-  Settings, 
+  // LayoutDashboard, 
+  // Truck, 
+  // Package, 
+  // Settings, 
   Search, 
   Bell, 
   HelpCircle,
