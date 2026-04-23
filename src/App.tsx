@@ -9,7 +9,7 @@ import { BudgetPrefill } from './pages/BudgetPrefill';
 function Settings() {
   return (
     <div className="flex items-center justify-center h-full">
-      <h2 className="text-xl text-brand-text-muted">Settings Page Placeholder</h2>
+      <h2 className="text-xl text-brand-text-muted">Settings Page Placeholde</h2>
     </div>
   );
 }
