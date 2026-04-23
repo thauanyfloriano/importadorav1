@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { UploadCloud, FileSpreadsheet, Download, AlertCircle, CheckCircle, ChevronRight, Settings2 } from 'lucide-react';
+import { UploadCloud, FileSpreadsheet, Download, AlertCircle, CheckCircle, ChevronRight, Settings2, RotateCcw } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { processBudgetFiles, type PreviewData } from '../lib/excelProcessor';
 
@@ -28,6 +28,14 @@ export function BudgetPrefill() {
     }
   };
 
+  const handleReset = () => {
+    setPackingListFile(null);
+    setMasterFile(null);
+    setPreviewData(null);
+    setError(null);
+    setFinalFileBlob(null);
+  };
+
   const handleDownload = () => {
     if (!finalFileBlob) return;
     const url = window.URL.createObjectURL(finalFileBlob);
@@ -47,6 +55,15 @@ export function BudgetPrefill() {
           <h1 className="text-2xl font-bold text-white mb-1">Pré-preenchimento para Orçamento</h1>
           <p className="text-sm text-brand-text-muted">Faça upload de um Packing List para preencher a Planilha Master automaticamente.</p>
         </div>
+        {(packingListFile || masterFile || previewData) && (
+          <button 
+            onClick={handleReset}
+            className="flex items-center px-4 py-2 bg-[#121827] hover:bg-[#1e293b] text-sm text-brand-text font-medium rounded-md transition-colors border border-[#1e293b]"
+          >
+            <RotateCcw className="w-4 h-4 mr-2 text-brand-text-muted" />
+            Resetar Tudo
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -104,7 +121,7 @@ export function BudgetPrefill() {
           )}
         >
           {isLoading ? (
-             <span className="flex items-center"><span className="animate-spin w-4 h-4 border-2 border-white/20 border-t-white rounded-full mr-2"></span> Processando...</span>
+             <span className="flex items-center"><span className="animate-spin w-4 h-4 border-2 border-white/20 border-t-white rounded-full mr-2"></span> Extraindo e Traduzindo...</span>
           ) : (
              <span className="flex items-center">Gerar Pré-preenchimento <ChevronRight className="w-4 h-4 ml-2" /></span>
           )}

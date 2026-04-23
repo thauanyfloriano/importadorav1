@@ -1,4 +1,6 @@
 import ExcelJS from 'exceljs';
+import * as XLSX from 'xlsx';
+import { translateToPortuguese, containsChinese } from './translator';
 
 export interface ParsedItem {
   ref: string;
@@ -8,9 +10,9 @@ export interface ParsedItem {
   totalCbm: number;
   unitWeight: number;
   unitCbm: number;
-  imageUrl?: string; // Original image extension/Type mapping for ExcelJS
-  imageBlobUrl?: string; // For UI preview
-  imageBuffer?: ArrayBuffer; // For injection
+  imageUrl?: string; 
+  imageBlobUrl?: string; 
+  imageBuffer?: ArrayBuffer; 
   imageExt?: string;
 }
 
@@ -28,118 +30,113 @@ const regexes = {
   image: /(pic|imag|foto|photo|picture|图片)/i,
 };
 
-function getCellValue(cell: ExcelJS.Cell | undefined): string {
-  if (!cell) return '';
-  if (cell.value === null || cell.value === undefined) return '';
-  if (typeof cell.value === 'object') {
-    if ('richText' in cell.value) {
-      return cell.value.richText.map((rt: any) => rt.text).join('').trim();
-    }
-    if ('sharedFormula' in cell.value || 'formula' in cell.value) {
-      return String(cell.result || '').trim();
-    }
-  }
-  return String(cell.value).trim();
+function normalizeString(val: any): string {
+  if (val === null || val === undefined) return '';
+  return String(val).replace(/\n/g, ' ').replace(/\r/g, ' ').trim();
 }
 
 /**
- * Extracts items from Packing List file
+ * Extracts items from Packing List file using SheetJS (XLSX) for data 
+ * and ExcelJS for image extraction (if .xlsx)
  */
 export async function parsePackingList(file: File): Promise<ParsedItem[]> {
   const arrayBuffer = await file.arrayBuffer();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(arrayBuffer);
-
-  // Consider the first sheet represents the packing list
-  const worksheet = workbook.worksheets[0];
-  if (!worksheet) throw new Error("A planilha de Packing List está vazia.");
+  
+  // 1. Read textual data using SheetJS (handles both .xls and .xlsx robustly)
+  const workbookXlsx = XLSX.read(arrayBuffer, { type: 'array' });
+  const sheetName = workbookXlsx.SheetNames[0];
+  if (!sheetName) throw new Error("A planilha de Packing List está vazia ou o formato é inválido.");
+  
+  const worksheetXlsx = workbookXlsx.Sheets[sheetName];
+  const rawData: any[][] = XLSX.utils.sheet_to_json(worksheetXlsx, { header: 1, defval: '' });
 
   let headerRowIndex = -1;
   const columnMap: Record<string, number[]> = {};
 
-  // Find header row: look for a row that has at least 2 known columns
-  worksheet.eachRow((row, rowNumber) => {
-    if (headerRowIndex !== -1) return; // already found
+  // Find header row: Score each row based on distinct matching categories
+  let maxScore = 0;
+  
+  for (let r = 0; r < Math.min(rawData.length, 50); r++) {
+    const row = rawData[r];
+    if (!row) continue;
     
-    let matches = 0;
+    const rowMap: Record<string, number[]> = {};
 
-    row.eachCell((cell) => {
-      const val = getCellValue(cell);
-      if (regexes.ref.test(val) || regexes.desc.test(val)) matches++;
-      if (regexes.qty.test(val) || regexes.weight.test(val) || regexes.cbm.test(val)) matches++;
-    });
+    for (let c = 0; c < row.length; c++) {
+      const val = normalizeString(row[c]);
+      if (!val) continue;
 
-    if (matches >= 2) {
-      headerRowIndex = rowNumber;
-      // Map columns allowing arrays of matches
-      row.eachCell((cell, colNumber) => {
-        const val = getCellValue(cell);
-        
-        if (regexes.ref.test(val)) {
-            columnMap['ref'] = columnMap['ref'] || [];
-            columnMap['ref'].push(colNumber);
-        } else if (regexes.desc.test(val)) {
-            columnMap['desc'] = columnMap['desc'] || [];
-            columnMap['desc'].push(colNumber);
-        } else if (regexes.qty.test(val)) {
-            columnMap['qty'] = columnMap['qty'] || [];
-            columnMap['qty'].push(colNumber);
-        } else if (regexes.weight.test(val)) {
-            columnMap['weight'] = columnMap['weight'] || [];
-            columnMap['weight'].push(colNumber);
-        } else if (regexes.cbm.test(val)) {
-            columnMap['cbm'] = columnMap['cbm'] || [];
-            columnMap['cbm'].push(colNumber);
-        } else if (regexes.image.test(val)) {
-            columnMap['image'] = columnMap['image'] || [];
-            columnMap['image'].push(colNumber);
-        }
-      });
+      if (regexes.ref.test(val)) { rowMap['ref'] = rowMap['ref'] || []; rowMap['ref'].push(c); }
+      else if (regexes.desc.test(val)) { rowMap['desc'] = rowMap['desc'] || []; rowMap['desc'].push(c); }
+      else if (regexes.qty.test(val)) { rowMap['qty'] = rowMap['qty'] || []; rowMap['qty'].push(c); }
+      else if (regexes.weight.test(val)) { rowMap['weight'] = rowMap['weight'] || []; rowMap['weight'].push(c); }
+      else if (regexes.cbm.test(val)) { rowMap['cbm'] = rowMap['cbm'] || []; rowMap['cbm'].push(c); }
+      else if (regexes.image.test(val)) { rowMap['image'] = rowMap['image'] || []; rowMap['image'].push(c); }
     }
-  });
+    
+    const distinctMatches = Object.keys(rowMap).length;
+    if (distinctMatches > maxScore && distinctMatches >= 2) {
+      maxScore = distinctMatches;
+      headerRowIndex = r;
+      columnMap['ref'] = rowMap['ref'] || [];
+      columnMap['desc'] = rowMap['desc'] || [];
+      columnMap['qty'] = rowMap['qty'] || [];
+      columnMap['weight'] = rowMap['weight'] || [];
+      columnMap['cbm'] = rowMap['cbm'] || [];
+      columnMap['image'] = rowMap['image'] || [];
+    }
+  }
 
   if (headerRowIndex === -1) {
-    throw new Error("Não foi possível identificar o cabeçalho no Packing List (Ex: faltando colunas Ref / Qty).");
+    throw new Error("Não foi possível identificar o cabeçalho no Packing List (faltam colunas obrigatórias como Ref, Qty, Peso).");
   }
 
-  // Extract media from workbook (only some exceljs versions support this cleanly, but we try)
-  // workbook.model.media contains all images
-  const media = (workbook.model as any).media || [];
-  
-  // Map images by row based on worksheet placements
+  // 2. Extract media from workbook using ExcelJS (only works well for .xlsx)
   const imageByRow: Record<number, any> = {};
-  if (worksheet.getImages) {
-    for (const imagePlacement of worksheet.getImages()) {
-      const rowNum = Math.floor(imagePlacement.range.tl.row) + 1; // 0-indexed in range
-      // Just keep the first image found for the row
-      if (!imageByRow[rowNum]) {
-        const mediaId = imagePlacement.imageId;
-        const mediaObj = media.find((m: any) => m.index === mediaId);
-        if (mediaObj && mediaObj.buffer) {
-          imageByRow[rowNum] = {
-            buffer: mediaObj.buffer,
-            ext: mediaObj.extension
-          };
+  
+  // Only attempt image extraction if it's not a legacy .xls file
+  if (file.name.toLowerCase().endsWith('.xlsx')) {
+    try {
+      const workbookExcelJs = new ExcelJS.Workbook();
+      await workbookExcelJs.xlsx.load(arrayBuffer);
+      const worksheetExcelJs = workbookExcelJs.worksheets[0];
+      
+      const media = (workbookExcelJs.model as any).media || [];
+      
+      if (worksheetExcelJs && worksheetExcelJs.getImages) {
+        for (const imagePlacement of worksheetExcelJs.getImages()) {
+          const rowNum = Math.floor(imagePlacement.range.tl.row); // 0-indexed to match rawData
+          if (!imageByRow[rowNum]) {
+            const mediaId = imagePlacement.imageId;
+            const mediaObj = media.find((m: any) => m.index === mediaId);
+            if (mediaObj && mediaObj.buffer) {
+              imageByRow[rowNum] = {
+                buffer: mediaObj.buffer,
+                ext: mediaObj.extension
+              };
+            }
+          }
         }
       }
+    } catch (e) {
+      console.warn("Falha ao extrair imagens via ExcelJS:", e);
     }
   }
 
-  const getBestNumber = (row: ExcelJS.Row, colIndexes: number[] | undefined): number => {
-    if (!colIndexes) return 0;
-    // Iterate backwards. In Packing lists, "Total" columns usually appear to the right of "Unit" ones.
+  const getBestNumber = (row: any[], colIndexes: number[] | undefined): number => {
+    if (!colIndexes || colIndexes.length === 0) return 0;
     for (let i = colIndexes.length - 1; i >= 0; i--) {
-      const val = getCellValue(row.getCell(colIndexes[i]));
-      const num = parseFloat(val.replace(',', '.').replace(/[^0-9.-]/g, '')) || 0;
-      if (num > 0) return num;
+      const val = String(row[colIndexes[i]] || '');
+      const num = parseFloat(val.replace(',', '.').replace(/[^0-9.-]/g, ''));
+      if (!isNaN(num) && num > 0) return num;
     }
     return 0;
   };
 
-  const getBestString = (row: ExcelJS.Row, colIndexes: number[] | undefined): string => {
-    if (!colIndexes) return '';
+  const getBestString = (row: any[], colIndexes: number[] | undefined): string => {
+    if (!colIndexes || colIndexes.length === 0) return '';
     for (let i = colIndexes.length - 1; i >= 0; i--) {
-      const val = getCellValue(row.getCell(colIndexes[i]));
+      const val = normalizeString(row[colIndexes[i]]);
       if (val) return val;
     }
     return '';
@@ -147,26 +144,42 @@ export async function parsePackingList(file: File): Promise<ParsedItem[]> {
 
   const itemsMap: Record<string, ParsedItem> = {};
 
-  worksheet.eachRow((row, rowNumber) => {
-    if (rowNumber <= headerRowIndex) return; // Skip headers
-    
+  for (let r = headerRowIndex + 1; r < rawData.length; r++) {
+    const row = rawData[r];
+    if (!row || row.length === 0) continue;
+
     const numQty = getBestNumber(row, columnMap['qty']);
 
+    // FILTER: Ignorar completamente linhas que não possuem quantidade > 0.
+    // Isso evita puxar linhas de "Notas" ou "Instruções" que por acaso caem na coluna de ref/desc.
+    if (numQty <= 0) continue;
+
     let ref = getBestString(row, columnMap['ref']);
-    const desc = getBestString(row, columnMap['desc']);
+    let desc = getBestString(row, columnMap['desc']);
     
+    // FILTER: Ignorar textos excessivamente longos (indicativo de notas/termos legais)
+    if ((ref && ref.length > 150) || (desc && desc.length > 250)) continue;
+
     if (!ref) {
-      if (desc || numQty > 0) {
-         ref = 'UNREF-' + rowNumber; // Use generic ref if missing
+      if (desc) {
+         ref = 'UNREF-' + (r + 1); // Use generic ref if missing
       } else {
-         return; // If BOTH ref/desc and qty are missing, assume empty row
+         continue; // If BOTH ref/desc are missing, assume empty row
       }
+    }
+    
+    // TRADUÇÃO: Se for chinês, traduz para o Português
+    if (containsChinese(ref)) {
+      ref = await translateToPortuguese(ref);
+    }
+    if (containsChinese(desc)) {
+      desc = await translateToPortuguese(desc);
     }
     
     const numWeight = getBestNumber(row, columnMap['weight']);
     const numCbm = getBestNumber(row, columnMap['cbm']);
 
-    let imgData = imageByRow[rowNumber];
+    const imgData = imageByRow[r];
 
     if (itemsMap[ref]) {
       // Aggregate
@@ -190,7 +203,7 @@ export async function parsePackingList(file: File): Promise<ParsedItem[]> {
         imageExt: imgData?.ext
       };
     }
-  });
+  }
 
   // Calculate units
   const result: ParsedItem[] = Object.values(itemsMap).map(item => {
@@ -229,7 +242,6 @@ export async function processBudgetFiles(packingListFile: File, masterFile: File
   }
 
   // Preencher Aba "Master"
-  // Procura a linha em branco inicial ou assume a linha 2 para os dados
   const msStartRow = 2; // Default
   items.forEach((item, index) => {
     const rowNum = msStartRow + index;
@@ -249,7 +261,7 @@ export async function processBudgetFiles(packingListFile: File, masterFile: File
 
   // Preencher Aba "Produtos"
   if (prodSheet) {
-    const prodStartRow = 2; // Assuming line 2 for products
+    const prodStartRow = 2; 
     items.forEach((item, index) => {
       const rowNum = prodStartRow + index;
       const row = prodSheet.getRow(rowNum);
@@ -269,22 +281,19 @@ export async function processBudgetFiles(packingListFile: File, masterFile: File
       // Col B: Imagens (2)
       if (item.imageBuffer && item.imageExt) {
         try {
-          // Add image to workbook
           const imageId = masterWorkbook.addImage({
             buffer: item.imageBuffer,
             extension: item.imageExt as any,
           });
           
-          // Add to cell B[linha] (which is col index 1, row index diff)
           costSheet.addImage(imageId, {
             tl: { col: 1, row: rowNum - 1 } as any,
             br: { col: 2, row: rowNum } as any,
             editAs: 'oneCell'
           });
 
-          // Aumentar a altura da linha para a imagem caber
           const row = costSheet.getRow(rowNum);
-          row.height = 80; // approximate pleasant height
+          row.height = 80;
           costSheet.getColumn(2).width = 15;
         } catch (e) {
           console.warn('Falha ao injetar imagem na linha', rowNum, e);

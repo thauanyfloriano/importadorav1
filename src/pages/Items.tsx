@@ -1,4 +1,5 @@
-import { Filter, Edit2, CheckCircle, AlertTriangle, ChevronLeft, ChevronRight, Map } from 'lucide-react';
+import { useState } from 'react';
+import { Filter, Edit2, CheckCircle, AlertTriangle, ChevronLeft, ChevronRight, Map, Search, RotateCcw, Trash2 } from 'lucide-react';
 
 const mockItems = [
   {
@@ -52,6 +53,24 @@ const mockItems = [
 ];
 
 export function Items() {
+  const [items, setItems] = useState(mockItems);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const filteredItems = items.filter(item => 
+    item.desc.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    item.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    item.ncm.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const handleDelete = (id: string) => {
+    setItems(items.filter(item => item.id !== id));
+  };
+
+  const handleReset = () => {
+    setSearchTerm('');
+    setItems(mockItems);
+  };
+
   return (
     <div className="max-w-[1400px] mx-auto h-full flex flex-col pb-10">
       
@@ -62,9 +81,27 @@ export function Items() {
           <p className="text-sm text-brand-text-muted">Consolidação central de 14 packing lists ativos</p>
         </div>
         <div className="flex items-center gap-3">
+          <div className="relative group">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-text-muted group-focus-within:text-brand-accent transition-colors" />
+            <input 
+              type="text" 
+              placeholder="Buscar por SKU, Descrição ou NCM..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10 pr-4 py-2 bg-[#121827] border border-[#1e293b] rounded-md text-sm text-white placeholder:text-brand-text-muted focus:outline-none focus:border-brand-accent/50 w-[300px] transition-all"
+            />
+          </div>
+          <button 
+            onClick={handleReset}
+            className="flex items-center px-4 py-2 bg-[#121827] hover:bg-[#1e293b] text-sm text-brand-text font-medium rounded-md transition-colors border border-[#1e293b]"
+            title="Resetar Filtros e Dados"
+          >
+            <RotateCcw className="w-4 h-4 mr-2 text-brand-text-muted" />
+            Resetar
+          </button>
           <button className="flex items-center px-4 py-2 bg-[#121827] hover:bg-[#1e293b] text-sm text-brand-text font-medium rounded-md transition-colors border border-[#1e293b]">
             <Filter className="w-4 h-4 mr-2 text-brand-text-muted" />
-            Filtros Avançados
+            Filtros
           </button>
           <button className="flex items-center px-4 py-2 bg-[#a2b4ff] hover:bg-[#8da3fa] text-[#0e121e] text-sm font-bold rounded-md transition-colors shadow-sm">
             <Edit2 className="w-4 h-4 mr-2" />
@@ -118,51 +155,83 @@ export function Items() {
                  <th className="py-4 px-4 text-[10px] font-bold text-brand-text-muted tracking-widest uppercase text-right">Peso (KG)</th>
                  <th className="py-4 px-4 text-[10px] font-bold text-brand-text-muted tracking-widest uppercase">Dimensões (CM)</th>
                  <th className="py-4 px-4 text-[10px] font-bold text-brand-text-muted tracking-widest uppercase text-right pr-6">Status</th>
+                 <th className="py-4 px-4 w-10"></th>
                </tr>
              </thead>
              <tbody className="divide-y divide-[#1e293b]">
-               {mockItems.map((item, i) => (
-                 <tr key={i} className="hover:bg-[#161c2c] transition-colors group cursor-default">
-                   <td className="py-4 px-6 w-12"><div className="w-4 h-4 rounded border border-[#334155] bg-transparent"></div></td>
-                   <td className="py-4 px-4">
-                     <span className="text-xs font-mono text-brand-text-muted">{item.id.split('-').join('-\n')}</span>
-                   </td>
-                   <td className="py-4 px-4">
-                     <p className="text-sm font-semibold text-white mb-0.5 truncate max-w-sm">{item.desc}</p>
-                     <p className="text-[10px] text-brand-text-muted">Lote: {item.lote}</p>
-                   </td>
-                   <td className="py-4 px-4 text-center">
-                     <div className="flex items-center justify-center gap-2">
-                       <span className={`px-2 py-1 bg-[#0e121e] rounded text-xs font-mono font-medium border ${item.ncmStatus === 'error' ? 'text-brand-error border-brand-error/30' : 'text-brand-text-muted border-[#1e293b]'}`}>
-                         {item.ncm}
+               {filteredItems.length > 0 ? (
+                 filteredItems.map((item) => (
+                   <tr key={item.id} className="hover:bg-[#161c2c] transition-colors group cursor-default">
+                     <td className="py-4 px-6 w-12"><div className="w-4 h-4 rounded border border-[#334155] bg-transparent"></div></td>
+                     <td className="py-4 px-4">
+                       <span className="text-xs font-mono text-brand-text-muted">{item.id.split('-').join('-\n')}</span>
+                     </td>
+                     <td className="py-4 px-4">
+                       <p className="text-sm font-semibold text-white mb-0.5 truncate max-w-sm">{item.desc}</p>
+                       <p className="text-[10px] text-brand-text-muted">Lote: {item.lote}</p>
+                     </td>
+                     <td className="py-4 px-4 text-center">
+                       <div className="flex items-center justify-center gap-2">
+                         <span className={`px-2 py-1 bg-[#0e121e] rounded text-xs font-mono font-medium border ${item.ncmStatus === 'error' ? 'text-brand-error border-brand-error/30' : 'text-brand-text-muted border-[#1e293b]'}`}>
+                           {item.ncm}
+                         </span>
+                         {item.ncmStatus === 'valid' ? (
+                           <div className="bg-[#3b82f6]/20 p-0.5 rounded-full"><CheckCircle className="w-3 h-3 text-[10px] text-[#3b82f6]" /></div>
+                         ) : (
+                           <AlertTriangle className="w-4 h-4 text-brand-error" />
+                         )}
+                       </div>
+                     </td>
+                     <td className="py-4 px-4 text-right">
+                       <span className="text-sm font-bold text-white block">{item.qty}</span>
+                       <span className="text-[10px] text-brand-text-muted">{item.unit}</span>
+                     </td>
+                     <td className="py-4 px-4 text-right">
+                       <span className="text-sm font-semibold text-white">{item.weight}</span>
+                     </td>
+                     <td className="py-4 px-4">
+                       <span className="text-[11px] font-mono text-brand-text-muted block whitespace-pre-wrap leading-tight">{item.dims.split(' x ').join(' x\n')}</span>
+                     </td>
+                     <td className="py-4 px-4 text-right pr-6">
+                       <span className={`inline-block px-2 py-1 text-[9px] font-bold tracking-widest uppercase rounded
+                          ${item.status === 'CONSOLIDADO' ? 'text-[#3b82f6]' : 
+                            item.status === 'PENDENTE NCM' ? 'bg-brand-error/20 text-brand-error' : 
+                            'text-brand-text-muted'}`}>
+                         {item.status}
                        </span>
-                       {item.ncmStatus === 'valid' ? (
-                         <div className="bg-[#3b82f6]/20 p-0.5 rounded-full"><CheckCircle className="w-3 h-3 text-[10px] text-[#3b82f6]" /></div>
-                       ) : (
-                         <AlertTriangle className="w-4 h-4 text-brand-error" />
-                       )}
+                     </td>
+                     <td className="py-4 px-4">
+                       <button 
+                         onClick={() => handleDelete(item.id)}
+                         className="p-2 text-brand-text-muted hover:text-brand-error opacity-0 group-hover:opacity-100 transition-all"
+                         title="Excluir Item"
+                       >
+                         <Trash2 className="w-4 h-4" />
+                       </button>
+                     </td>
+                   </tr>
+                 ))
+               ) : (
+                 <tr>
+                   <td colSpan={9} className="py-20 text-center">
+                     <div className="flex flex-col items-center gap-4">
+                       <div className="p-4 bg-brand-panel border border-[#1e293b] rounded-full">
+                         <Search className="w-8 h-8 text-brand-text-muted" />
+                       </div>
+                       <div>
+                         <p className="text-white font-semibold">Nenhum item encontrado</p>
+                         <p className="text-sm text-brand-text-muted">Tente ajustar seus termos de busca ou filtros.</p>
+                       </div>
+                       <button 
+                         onClick={handleReset}
+                         className="mt-2 text-brand-accent hover:underline text-sm font-medium"
+                       >
+                         Limpar todos os filtros
+                       </button>
                      </div>
                    </td>
-                   <td className="py-4 px-4 text-right">
-                     <span className="text-sm font-bold text-white block">{item.qty}</span>
-                     <span className="text-[10px] text-brand-text-muted">{item.unit}</span>
-                   </td>
-                   <td className="py-4 px-4 text-right">
-                     <span className="text-sm font-semibold text-white">{item.weight}</span>
-                   </td>
-                   <td className="py-4 px-4">
-                     <span className="text-[11px] font-mono text-brand-text-muted block whitespace-pre-wrap leading-tight">{item.dims.split(' x ').join(' x\n')}</span>
-                   </td>
-                   <td className="py-4 px-4 text-right pr-6">
-                     <span className={`inline-block px-2 py-1 text-[9px] font-bold tracking-widest uppercase rounded
-                        ${item.status === 'CONSOLIDADO' ? 'text-[#3b82f6]' : 
-                          item.status === 'PENDENTE NCM' ? 'bg-brand-error/20 text-brand-error' : 
-                          'text-brand-text-muted'}`}>
-                       {item.status}
-                     </span>
-                   </td>
                  </tr>
-               ))}
+               )}
              </tbody>
            </table>
          </div>
